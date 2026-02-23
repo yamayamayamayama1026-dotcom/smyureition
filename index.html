@@ -1,0 +1,666 @@
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>安全教育：偏荷重衝突シミュレーション</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Three.js CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- OrbitControls (カメラ操作用ライブラリ) -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <style>
+        /* 画面全体のレイアウト：スクロール禁止、完全な画面フィット */
+        html, body { 
+            margin: 0; 
+            padding: 0; 
+            height: 100vh; 
+            width: 100vw; 
+            overflow: hidden; 
+            background-color: #0f172a; 
+            touch-action: none;
+        }
+        
+        #main-wrapper {
+            display: flex;
+            width: 100%;
+            height: 100%;
+            flex-direction: column; /* UIを上、シミュを下に配置 */
+        }
+        
+        @media (min-width: 1024px) {
+            #main-wrapper {
+                flex-direction: row;
+            }
+        }
+        
+        #ui-container { 
+            width: 100%;
+            background: #111827;
+            border-bottom: 1px solid rgba(255,255,255,0.1); 
+            padding: 0.75rem; 
+            z-index: 50; 
+            flex-shrink: 0; 
+        }
+
+        @media (min-width: 1024px) {
+            #ui-container {
+                width: 320px;
+                height: 100%;
+                border-bottom: none;
+                border-right: 1px solid rgba(255,255,255,0.1);
+                padding: 1.5rem;
+            }
+        }
+
+        #canvas-container { 
+            flex-grow: 1; 
+            width: 100%;
+            position: relative; 
+            background: #0f172a; 
+            overflow: hidden;
+            z-index: 10;
+        }
+
+        canvas { 
+            display: block;
+            width: 100% !important;
+            height: 100% !important;
+        }
+        
+        .btn-area {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+        .btn-area.active {
+            background: #38bdf8;
+            color: #0f172a;
+            border-color: #38bdf8;
+            font-weight: bold;
+        }
+        .btn-start {
+            background: linear-gradient(135deg, #22c55e 0%, #15803d 100%);
+            box-shadow: 0 4px 14px 0 rgba(34, 197, 94, 0.4);
+            cursor: pointer;
+        }
+        .btn-start.locked {
+            background: #475569 !important;
+            box-shadow: none !important;
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .result-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 1rem;
+            border-radius: 12px;
+            text-align: center;
+            display: none;
+            z-index: 100;
+            pointer-events: none;
+            width: 90%;
+            max-width: 400px;
+        }
+
+        /* カメラ操作のヒント */
+        #camera-hint {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.5);
+            color: rgba(255,255,255,0.7);
+            font-size: 10px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            pointer-events: none;
+            z-index: 20;
+        }
+    </style>
+</head>
+<body>
+
+<div id="main-wrapper">
+    <!-- UI Container (Top) -->
+    <div id="ui-container">
+        <div class="flex items-center justify-between mb-2 md:block md:mb-4">
+            <div>
+                <h1 class="text-sm md:text-lg font-bold text-white leading-none">安全シミュレーション</h1>
+                <p class="text-[7px] md:text-[9px] tracking-widest opacity-50 text-blue-400 font-bold uppercase mt-1">KY Training Package</p>
+            </div>
+            <button id="reset-btn-mobile" class="md:hidden bg-slate-700 text-white text-[8px] px-2 py-1 rounded">初期化</button>
+        </div>
+        
+        <div class="grid grid-cols-1 md:block gap-2 md:space-y-4">
+            <div class="p-2 md:p-3 bg-black/40 rounded border border-white/5">
+                <p class="text-[9px] md:text-[11px] leading-tight text-slate-300">
+                    <span class="text-red-400 font-bold">【KY活動】</span> 作業員の立ち位置を変えてもしもの動きをKYしましょう。ドラッグで視点変更、ピンチでズームが可能です。
+                </p>
+            </div>
+
+            <div class="flex items-center space-x-2 md:block md:space-x-0 md:mt-4">
+                <div class="grid grid-cols-3 gap-1 flex-grow">
+                    <button id="btn-A" class="btn-area py-2 rounded text-[10px] md:text-sm text-white">エリア A</button>
+                    <button id="btn-B" class="btn-area py-2 rounded text-[10px] md:text-sm text-white">エリア B</button>
+                    <button id="btn-C" class="btn-area py-2 rounded text-[10px] md:text-sm text-white">エリア C</button>
+                </div>
+                <button id="start-btn" class="btn-start locked px-4 py-2 md:w-full md:py-3 md:mt-3 rounded-lg text-xs md:text-base font-bold text-white whitespace-nowrap">
+                    シミュ開始
+                </button>
+            </div>
+            
+            <button id="reset-btn" class="hidden md:block bg-slate-700 hover:bg-slate-600 text-white py-2 rounded text-[10px] w-full transition uppercase mt-2">初期状態に戻す</button>
+        </div>
+    </div>
+
+    <!-- 3D Canvas Container (Bottom) -->
+    <div id="canvas-container">
+        <div id="camera-hint">ドラッグ：視点回転 / ピンチ：ズーム</div>
+        <div id="result-ui" class="result-overlay">
+            <h2 id="result-title" class="text-xl md:text-2xl font-black mb-2 text-white"></h2>
+            <p id="result-msg" class="text-[10px] md:text-sm font-bold bg-black/90 p-3 rounded-lg text-white shadow-2xl leading-normal"></p>
+        </div>
+    </div>
+</div>
+
+<script>
+    // グローバル変数の宣言
+    let scene, camera, renderer, clock, orbitControls;
+    let beam, string1, string2, human;
+    let areas = {};
+    let currentArea = null;
+    let gameStatus = 'ready'; 
+
+    const CEILING_Y = 15; // 支点の高さ
+    const cable_length = 10;
+    const dist_between_cables = 3.5;
+
+    // 物理シミュレーション用パラメータ
+    const simParams = {
+        length: 10,
+        dist: 3.5
+    };
+
+    let state = {
+        // Swing用
+        pivotTheta: 0, pivotOmega: 0, beamAlpha: 0, beamAlphaV: 0,
+        // Drop用
+        beamVelocity: new THREE.Vector3(0,0,0), beamAngularVelocity: new THREE.Vector3(0,0,0),
+        // 共通
+        humanVelocity: null, humanRotation: null, isHumanBlown: false,
+        scenario: 'swing', // 'swing' or 'drop'
+        elapsedTime: 0, // シミュレーション経過時間
+        hitTime: null   // 衝突時刻を記録
+    };
+
+    const areaPositions = {
+        'A': { x: -3.8, z: 0 },    
+        'B': { x: -0.6, z: 2.2 }, 
+        'C': { x: 7.0, z: 8.0 }    
+    };
+
+    function waitForContainer() {
+        const container = document.getElementById('canvas-container');
+        if (container && container.clientWidth > 0 && container.clientHeight > 0) {
+            // ライブラリの読み込み確認
+            if (typeof THREE !== 'undefined' && typeof THREE.OrbitControls !== 'undefined') {
+                init();
+            } else {
+                setTimeout(waitForContainer, 50);
+            }
+        } else {
+            setTimeout(waitForContainer, 100);
+        }
+    }
+
+    window.addEventListener('load', waitForContainer);
+
+    function init() {
+        if (renderer) return;
+
+        state.humanVelocity = new THREE.Vector3(0, 0, 0);
+        state.humanRotation = new THREE.Vector3(0, 0, 0);
+
+        const container = document.getElementById('canvas-container');
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0f172a);
+
+        const aspect = container.clientWidth / container.clientHeight;
+        camera = new THREE.PerspectiveCamera(45, aspect, 0.1, 2000);
+        
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+        renderer.setClearColor(0x0f172a);
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        container.appendChild(renderer.domElement);
+
+        // OrbitControlsの初期化
+        orbitControls = new THREE.OrbitControls(camera, renderer.domElement);
+        orbitControls.enableDamping = true;
+        orbitControls.dampingFactor = 0.05;
+        orbitControls.screenSpacePanning = false;
+        orbitControls.minDistance = 5;
+        orbitControls.maxDistance = 100;
+        orbitControls.maxPolarAngle = Math.PI / 2;
+
+        updateCameraAngle();
+
+        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(10, 20, 10);
+        scene.add(dirLight);
+
+        // Beam (荷)
+        beam = new THREE.Mesh(new THREE.BoxGeometry(6, 0.6, 1.2), new THREE.MeshPhongMaterial({ color: 0x0e7490, shininess: 100 }));
+        scene.add(beam);
+
+        // Strings (ワイヤー)
+        string1 = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xcbd5e1 }));
+        string2 = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xcbd5e1 }));
+        scene.add(string1); scene.add(string2);
+
+        scene.add(new THREE.GridHelper(100, 50, 0x1e293b, 0x1e293b));
+        
+        createAreas();
+        createHuman();
+
+        clock = new THREE.Clock(false);
+
+        ['A', 'B', 'C'].forEach(id => {
+            const btn = document.getElementById(`btn-${id}`);
+            if (btn) btn.onclick = () => selectArea(id);
+        });
+
+        document.getElementById('start-btn').onclick = startSimulation;
+        document.getElementById('reset-btn').onclick = resetSimulation;
+        document.getElementById('reset-btn-mobile').onclick = resetSimulation;
+
+        window.addEventListener('resize', onWindowResize);
+        animate();
+    }
+
+    function updateCameraAngle() {
+        const container = document.getElementById('canvas-container');
+        const aspect = container.clientWidth / container.clientHeight;
+        
+        if (aspect < 1) {
+            camera.fov = 65;
+            camera.position.set(25, 20, 35); 
+        } else {
+            camera.fov = 40;
+            camera.position.set(20, 15, 30);
+        }
+        camera.updateProjectionMatrix();
+        orbitControls.target.set(0, 4, 0);
+        orbitControls.update();
+    }
+
+    function createTextLabel(text, position) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 128; canvas.height = 128;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#38bdf8'; ctx.font = 'Bold 90px sans-serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(text, 64, 64);
+        const texture = new THREE.CanvasTexture(canvas);
+        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true }));
+        sprite.position.set(position.x, 3.0, position.z);
+        sprite.scale.set(2, 2, 1);
+        scene.add(sprite);
+    }
+
+    function createAreas() {
+        Object.keys(areaPositions).forEach(key => {
+            const pos = areaPositions[key];
+            const mesh = new THREE.Mesh(
+                new THREE.RingGeometry(1.5, 1.7, 32),
+                new THREE.MeshBasicMaterial({ color: 0x38bdf8, side: THREE.DoubleSide, transparent: true, opacity: 0.4 })
+            );
+            mesh.rotation.x = -Math.PI / 2;
+            mesh.position.set(pos.x, 0.02, pos.z);
+            scene.add(mesh);
+            areas[key] = mesh;
+            createTextLabel(key, pos);
+        });
+    }
+
+    function createHuman() {
+        const group = new THREE.Group();
+        const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 1.4, 16), new THREE.MeshPhongMaterial({ color: 0xfacc15 }));
+        torso.position.y = 0.7; group.add(torso);
+        const head = new THREE.Mesh(new THREE.SphereGeometry(0.35, 16, 16), new THREE.MeshPhongMaterial({ color: 0xfef08a }));
+        head.position.y = 1.7; group.add(head);
+        human = group; human.visible = false; scene.add(human);
+    }
+
+    function selectArea(id) {
+        if (gameStatus !== 'ready') return;
+        currentArea = id;
+        document.querySelectorAll('.btn-area').forEach(b => b.classList.remove('active'));
+        const btn = document.getElementById(`btn-${id}`);
+        if (btn) btn.classList.add('active');
+        human.position.set(areaPositions[id].x, 0, areaPositions[id].z);
+        human.visible = true;
+        const startBtn = document.getElementById('start-btn');
+        if (startBtn) startBtn.classList.remove('locked');
+        
+        Object.keys(areas).forEach(k => {
+            areas[k].material.color.set(0x38bdf8); areas[k].material.opacity = 0.4;
+        });
+        areas[id].material.color.set(0xfacc15); areas[id].material.opacity = 0.8;
+        orbitControls.target.set(areaPositions[id].x, 2, areaPositions[id].z);
+    }
+
+    function startSimulation() {
+        if (!currentArea || gameStatus !== 'ready') return;
+        gameStatus = 'moving';
+        state.isHumanBlown = false;
+        state.elapsedTime = 0; // 時間リセット
+        state.hitTime = null;  // 衝突時刻リセット
+
+        // Bエリアの場合は落下モード、それ以外はスイングモード
+        if (currentArea === 'B') {
+            state.scenario = 'drop';
+            // 両方のワイヤーを切断
+            string1.visible = false;
+            string2.visible = false;
+            // 垂直落下のため水平初速はほぼゼロ
+            // 回転のみ少し与えてリアルにする
+            state.beamVelocity.set(0, 0, 0); 
+            state.beamAngularVelocity.set((Math.random()-0.5)*0.5, (Math.random()-0.5)*0.5, (Math.random()-0.5)*0.5);
+        } else {
+            state.scenario = 'swing';
+            state.pivotTheta = 0.01; 
+            state.beamAlpha = 0.01;
+            // 片方のワイヤーを切断
+            string1.visible = true;
+            string2.visible = false;
+        }
+
+        const startBtn = document.getElementById('start-btn');
+        if (startBtn) startBtn.classList.add('locked');
+        clock.start();
+    }
+
+    function resetSimulation() {
+        gameStatus = 'ready';
+        state.pivotTheta = 0; state.pivotOmega = 0;
+        state.beamAlpha = 0; state.beamAlphaV = 0;
+        state.isHumanBlown = false; 
+        state.elapsedTime = 0;
+        state.hitTime = null;
+        
+        // 物理パラメータ完全リセット
+        state.beamVelocity.set(0,0,0);
+        state.beamAngularVelocity.set(0,0,0);
+        
+        string1.visible = true;
+        string2.visible = true;
+        human.visible = false; currentArea = null;
+        
+        beam.rotation.set(0,0,0);
+        beam.position.set(0, 5, 0);
+
+        // 作業者の姿勢とパラメータをリセット
+        human.rotation.set(0, 0, 0);
+        state.humanVelocity = new THREE.Vector3(0, 0, 0);
+        state.humanRotation = new THREE.Vector3(0, 0, 0);
+
+        document.querySelectorAll('.btn-area').forEach(b => b.classList.remove('active'));
+        const startBtn = document.getElementById('start-btn');
+        if (startBtn) startBtn.classList.add('locked');
+        document.getElementById('result-ui').style.display = 'none';
+        updateCameraAngle();
+        clock.stop();
+        Object.keys(areas).forEach(k => {
+            areas[k].material.color.set(0x38bdf8); areas[k].material.opacity = 0.4;
+        });
+    }
+
+    // 衝突判定（精度向上版）
+    function checkCollision() {
+        // ゲームが終了していたら監視ループを切る
+        if (gameStatus === 'finished' || gameStatus !== 'moving' || state.isHumanBlown) return;
+
+        // --- 5秒経過チェック (Bエリア用) ---
+        if (state.elapsedTime > 5.0) {
+            if (currentArea === 'B') {
+                endGame('near_miss'); // Bエリアで5秒経っても当たらなければ注意喚起
+            } else {
+                endGame('success');   // その他は成功
+            }
+            return;
+        }
+        
+        // --- 衝突計算 (線分 vs 点 の距離による高精度判定) ---
+        // 吊り荷(Beam)の両端のワールド座標を取得
+        // Beamはローカルで 幅6m (x: -3 ~ +3)
+        const beamHalfLen = 3.0;
+        const p1 = new THREE.Vector3(-beamHalfLen, 0, 0);
+        const p2 = new THREE.Vector3(beamHalfLen, 0, 0);
+        
+        p1.applyMatrix4(beam.matrixWorld);
+        p2.applyMatrix4(beam.matrixWorld);
+
+        // 作業員(Human)の中心座標 (高さ1.0m付近を狙う)
+        const humanPos = new THREE.Vector3().copy(human.position);
+        humanPos.y += 1.0; 
+
+        // 線分 p1-p2 と humanPos の最短距離の2乗を計算
+        const vec = new THREE.Vector3().subVectors(p2, p1);
+        const lenSq = vec.lengthSq();
+        let param = 0;
+        if (lenSq !== 0) {
+            const t = new THREE.Vector3().subVectors(humanPos, p1).dot(vec) / lenSq;
+            param = Math.max(0, Math.min(1, t)); // 0~1にクランプ
+        }
+        
+        // 線分上の最近傍点
+        const closestPoint = new THREE.Vector3().copy(p1).add(vec.multiplyScalar(param));
+        
+        // 距離計算
+        const distSq = closestPoint.distanceToSquared(humanPos);
+        
+        // 閾値設定: 吊り荷の厚み半径(約0.7) + 作業員半径(0.4) = 1.1m 程度
+        // 安全率を見て少し大きめの 1.2m (2乗で1.44) で判定
+        const threshold = 1.2; 
+        
+        if (distSq < threshold * threshold) {
+            state.isHumanBlown = true;
+            state.hitTime = state.elapsedTime; // 衝突時刻を記録
+            
+            // 吹き飛ばされ速度
+            if (currentArea === 'B') {
+                // 落下時の激突はより上方向へ
+                state.humanVelocity = new THREE.Vector3(-1, 8, 4);
+            } else {
+                // スイング時の激突
+                state.humanVelocity = new THREE.Vector3(-12, 8, (Math.random()-0.5)*4);
+            }
+            state.humanRotation = new THREE.Vector3((Math.random()-0.5)*1.2, 0.5, 0.5);
+            return;
+        }
+    }
+
+    function endGame(result) {
+        if (gameStatus === 'finished' && result !== 'hit') return;
+        gameStatus = 'finished';
+        const ui = document.getElementById('result-ui');
+        const title = document.getElementById('result-title');
+        const msg = document.getElementById('result-msg');
+        if (!ui || !title || !msg) return;
+        ui.style.display = 'block';
+        if (result === 'success') {
+            title.innerHTML = '安全完了'; title.style.color = '#22c55e';
+            msg.innerHTML = '安全距離を確保できています。常に予測外の動きを想定しましょう。';
+        } else if (result === 'near_miss') {
+            title.innerHTML = 'ヒヤリハット'; title.style.color = '#f59e0b';
+            msg.innerHTML = '衝突は免れましたが、危険な距離です。<br>荷が不規則にバウンドした場合、被災する可能性があります。';
+        } else {
+            title.innerHTML = '被災事故'; title.style.color = '#ef4444';
+            if (state.scenario === 'drop') {
+                msg.innerHTML = '吊り具の離脱により荷が落下・バウンドして激突しました。<br>「吊り具は外れないから大丈夫」という過信は禁物です。<br>マグネットやイーグルクランプ・フックに至るまで，すべての吊り具に外れるリスクがあります';
+            } else {
+                msg.innerHTML = '振られた荷が作業員に激突しました。重心の偏りやワイヤーの状態確認が重要です。';
+            }
+            if (currentArea && areas[currentArea]) {
+                areas[currentArea].material.color.set(0xef4444);
+            }
+        }
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+        if (!renderer || !orbitControls) return;
+
+        orbitControls.update();
+
+        const dt = clock && clock.running ? Math.min(clock.getDelta(), 0.02) : 0.02;
+        const g = 9.8;
+        const d = dist_between_cables / 2;
+        // 減速用ドラッグ係数
+        const drag = 0.96;
+
+        if (gameStatus === 'ready') {
+            beam.position.set(0, 5, 0); beam.rotation.set(0,0,0);
+            updateLine(string1, new THREE.Vector3(-d, CEILING_Y, 0), new THREE.Vector3(-d, 5, 0));
+            updateLine(string2, new THREE.Vector3(d, CEILING_Y, 0), new THREE.Vector3(d, 5, 0));
+        } else {
+            state.elapsedTime += dt;
+
+            // 衝突後の遅延メッセージ表示チェック
+            if (state.isHumanBlown && state.hitTime !== null && gameStatus !== 'finished') {
+                if (state.elapsedTime > state.hitTime + 2.0) {
+                    endGame('hit');
+                }
+            }
+
+            // 3秒経過で強制完全静止（物理演算のみ停止）
+            // 修正: 衝突の有無(!state.isHumanBlown)に関係なく、時間が来たら必ず止める
+            if (state.elapsedTime > 3.0) {
+                // 全ての速度・回転パラメータをゼロにする
+                state.pivotOmega = 0;
+                state.beamAlphaV = 0;
+                state.beamVelocity.set(0, 0, 0);
+                state.beamAngularVelocity.set(0, 0, 0);
+                if (state.humanVelocity) state.humanVelocity.set(0, 0, 0);
+                if (state.humanRotation) state.humanRotation.set(0, 0, 0);
+                
+                // 衝突チェックだけ継続する(checkCollision内で5秒判定を行うため)
+                // 物理移動は行わないが、判定ロジックだけ回す
+                checkCollision();
+                
+                renderer.render(scene, camera);
+                return; // ここで処理を中断し、下の物理演算を実行させない
+            }
+
+            // --- SCENARIO: SWING (A/C Area) ---
+            if (state.scenario === 'swing') {
+                state.pivotOmega += -(g / cable_length) * Math.sin(state.pivotTheta) * dt;
+                state.pivotTheta += (state.pivotOmega *= drag) * dt;
+                state.beamAlphaV += -g * Math.cos(state.beamAlpha) * 1.7 * dt;
+                state.beamAlpha += (state.beamAlphaV *= drag) * dt;
+                
+                const a1 = new THREE.Vector3(-d, CEILING_Y, 0);
+                const se = new THREE.Vector3(a1.x + Math.sin(state.pivotTheta) * cable_length, a1.y - Math.cos(state.pivotTheta) * cable_length, 0);
+                beam.position.set(se.x + Math.cos(state.beamAlpha) * d, se.y + Math.sin(state.beamAlpha) * d, 0);
+                beam.rotation.z = state.beamAlpha;
+                updateLine(string1, a1, se);
+                
+                orbitControls.target.lerp(new THREE.Vector3(beam.position.x * 0.5, 4.0, 0), 0.05);
+
+            // --- SCENARIO: DROP (B Area) ---
+            } else if (state.scenario === 'drop') {
+                // 重力加速度
+                state.beamVelocity.y -= g * dt;
+                
+                // 空気抵抗・摩擦による減速 (X, Z方向)
+                state.beamVelocity.x *= drag;
+                state.beamVelocity.z *= drag;
+                state.beamAngularVelocity.multiplyScalar(drag);
+                
+                // 位置更新
+                beam.position.add(state.beamVelocity.clone().multiplyScalar(dt));
+                
+                // 回転更新
+                beam.rotation.x += state.beamAngularVelocity.x * dt;
+                beam.rotation.y += state.beamAngularVelocity.y * dt;
+                beam.rotation.z += state.beamAngularVelocity.z * dt;
+
+                // 地面バウンド判定 (beam height 0.6 -> half height 0.3)
+                if (beam.position.y < 0.3) {
+                    beam.position.y = 0.3;
+                    state.beamVelocity.y *= -0.5; // バウンドによる減衰
+
+                    // Bエリアの作業者方向へ跳ねさせる処理
+                    // Bエリア位置: x=-0.6, z=2.2
+                    const targetX = -0.6;
+                    const targetZ = 2.2;
+                    // バウンドの瞬間に、ターゲット方向へ速度を与える (まだ衝突していない場合のみ)
+                    if (!state.isHumanBlown && Math.abs(state.beamVelocity.y) > 1.0) {
+                        state.beamVelocity.x += (targetX - beam.position.x) * 2.0;
+                        state.beamVelocity.z += (targetZ - beam.position.z) * 2.0;
+                    }
+
+                    // 床摩擦による追加減速
+                    state.beamVelocity.x *= 0.8;
+                    state.beamVelocity.z *= 0.8;
+                    
+                    state.beamAngularVelocity.x += (Math.random()-0.5)*5;
+                    state.beamAngularVelocity.z += (Math.random()-0.5)*5;
+                }
+
+                orbitControls.target.lerp(new THREE.Vector3(beam.position.x, 1.0, beam.position.z), 0.1);
+            }
+
+            // --- 共通: 人間吹き飛び処理 ---
+            if (state.isHumanBlown) {
+                state.humanVelocity.y -= g * 2.2 * dt;
+                
+                // 人間も摩擦で減速（移動と回転の両方を減速）
+                state.humanVelocity.x *= drag;
+                state.humanVelocity.z *= drag;
+                state.humanRotation.multiplyScalar(drag);
+
+                human.position.add(state.humanVelocity.clone().multiplyScalar(dt));
+                if (human.position.y < 0) {
+                    human.position.y = 0;
+                    state.humanVelocity.multiplyScalar(0.5); // 地面摩擦
+                }
+                
+                // 人間も回転させる
+                human.rotation.x += state.humanRotation.x;
+                human.rotation.y += state.humanRotation.y;
+                human.rotation.z += state.humanRotation.z;
+                
+                orbitControls.target.lerp(new THREE.Vector3(human.position.x, 1, human.position.z), 0.1);
+            } else {
+                checkCollision();
+            }
+        }
+        renderer.render(scene, camera);
+    }
+
+    function updateLine(line, p1, p2) {
+        if (!line || !line.geometry) return;
+        line.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array([p1.x, p1.y, p1.z, p2.x, p2.y, p2.z]), 3));
+        line.geometry.attributes.position.needsUpdate = true;
+    }
+
+    function onWindowResize() {
+        const container = document.getElementById('canvas-container');
+        if (!container || !camera || !renderer) return;
+        const w = container.clientWidth, h = container.clientHeight;
+        if (w === 0 || h === 0) return;
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+        renderer.setSize(w, h);
+    }
+</script>
+
+</body>
+</html>
